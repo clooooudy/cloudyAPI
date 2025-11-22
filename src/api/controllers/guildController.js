@@ -185,19 +185,26 @@ const getUserGuilds = async (req, res) => {
       // Récupérer le client Discord
       const discordClient = req.app.get('discordClient');
       if (!discordClient || !discordClient.isReady()) {
-        // Fallback: retourner seulement les guilds configurées
-        const guilds = await GuildConfig.find();
-        return res.json({
-          success: true,
-          guilds: guilds.map(g => ({
+        // Fallback: retourner les guilds configurées mais essayer de fusionner
+        // avec les données persistées dans la collection `Guild` si présentes
+        const guildConfigs = await GuildConfig.find();
+        const merged = [];
+        for (const g of guildConfigs) {
+          const stored = await Guild.findOne({ guildId: g.guildId }).lean();
+          merged.push({
             ...g.toObject(),
-            name: g.guildId,
-            icon: null,
-            memberCount: 0,
-            active: g.enabled ?? true,
+            name: stored?.name ?? g.name ?? g.guildId,
+            icon: stored?.icon ?? null,
+            memberCount: stored?.memberCount ?? 0,
+            active: stored?.active ?? g.enabled ?? true,
             botPresent: false,
             configured: true,
-          })),
+          });
+        }
+
+        return res.json({
+          success: true,
+          guilds: merged,
         });
       }
 
@@ -386,15 +393,17 @@ const getUserGuilds = async (req, res) => {
       const botIsInGuild = discordGuilds.has(guildConfig.guildId);
       if (!botIsInGuild) {
         // Vérifier si l'utilisateur a accès à cette guilde (via permissions explicites ou rôle global)
-        // Pour simplifier, on vérifie juste si c'est dans les guilds de l'utilisateur
         const alreadyAdded = userGuilds.some(g => g.guildId === guildConfig.guildId);
         if (!alreadyAdded) {
-          // Ajouter la guilde avec le flag botPresent: false
+          // Tenter de récupérer les données persistées depuis la collection `Guild`
+          const stored = await Guild.findOne({ guildId: guildConfig.guildId }).lean();
+
           userGuilds.push({
             ...guildConfig.toObject(),
-            name: guildConfig.guildId, // Pas de nom Discord disponible
-            icon: null,
-            memberCount: 0,
+            name: stored?.name ?? guildConfig.name ?? guildConfig.guildId,
+            icon: stored?.icon ?? null,
+            memberCount: stored?.memberCount ?? 0,
+            active: stored?.active ?? guildConfig.enabled ?? true,
             configured: true,
             botPresent: false, // Bot n'est plus présent
           });
